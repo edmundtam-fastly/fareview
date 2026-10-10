@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Fareview</title>
+    <meta name="description" content="Compare Uber, Lyft, Waymo, Zoox and Tesla Robotaxi on one screen." />
+    <meta name="theme-color" content="#f4f4f6" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0f1012" media="(prefers-color-scheme: dark)" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="Fareview" />
+    <meta name="format-detection" content="telephone=no" />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="icon" href="icons/icon-192.png" type="image/png" />
+    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <h1 class="brand">Fareview</h1>
+        <div class="top-actions">
+          <button class="icon-btn" data-act="history" aria-label="Ride history">
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 7v5l3 2M3.5 12a8.5 8.5 0 1 0 2.5-6M3 3v4h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <button class="icon-btn" data-act="settings" aria-label="Settings">
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="16" cy="7" r="2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="10" cy="17" r="2" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <section id="trip" class="trip" aria-label="Trip"></section>
+
+      <section id="summary" class="summary" hidden>
+        <div id="map" class="map" aria-hidden="true"></div>
+        <div id="summary-line" class="summary-line"></div>
+        <div id="summary-notes"></div>
+      </section>
+
+      <section id="controls" class="controls" hidden></section>
+      <main id="quotes" class="quotes" aria-live="polite"></main>
+      <footer id="footer" class="footer"></footer>
+    </div>
+    <div id="sheet" class="sheet-root" hidden></div>
+    <div id="toast" class="toast" role="status" hidden></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
