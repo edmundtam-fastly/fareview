@@ -23,7 +23,7 @@ The PRD assumes partner APIs. Uber, Lyft and the robotaxi companies don't give i
 
 | PRD | What Fareview does |
 |---|---|
-| FR-01 pickup/dropoff, GPS, saved, recent, map pin | ✅ GPS pickup, OpenStreetMap search (Photon), ☆ saved places, recents, “Choose on map” |
+| FR-01 pickup/dropoff, GPS, saved, recent, map pin | ✅ GPS pickup, OpenStreetMap search (Photon), Home / Work / custom-labelled saved places (add, rename, re-address, delete), recents, “Choose on map” |
 | FR-02 parallel quotes | ⚠️ **Estimates.** Real route distance and time (OSRM) × per-provider rate cards, shown as a range. Robotaxis appear only in metros where they run |
 | FR-03/04 one-screen compare, sort, badges | ✅ Price / ETA / Best value (your $/hour is set in Settings), Best price + Fastest badges, filters (XL, comfort/premium, autonomous, max $) |
 | FR-05/06 in-app booking with stored payment | ↪️ **Hand-off.** Book → confirm sheet → opens Uber/Lyft with pickup and drop-off filled in, and payment stays in that app. Waymo/Zoox/Tesla have no trip link, so the destination is copied and the app opens through the App Store. Waymo in Austin/Atlanta goes through Uber |

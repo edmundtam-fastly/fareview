@@ -15,7 +15,22 @@ import {
   type SortKey,
 } from './pricing.ts';
 import { PROVIDERS, PROVIDER_ORDER, availabilityIn, findMetro, haversineKm } from './providers.ts';
-import { clearAll, isSaved, load, pushRecent, save, toggleSaved, type Data } from './store.ts';
+import {
+  KIND_LABEL,
+  clearAll,
+  findSaved,
+  load,
+  newId,
+  orderedSaved,
+  pushRecent,
+  removeSaved,
+  save,
+  savedOfKind,
+  upsertSaved,
+  type Data,
+  type PlaceKind,
+  type SavedPlace,
+} from './store.ts';
 import type { Metro, Observation, Place, ProviderPref, Quote, Route } from './types.ts';
 
 // ---------------------------------------------------------------- helpers
@@ -25,6 +40,20 @@ const $ = <T extends HTMLElement = HTMLElement>(sel: string, root: ParentNode = 
 function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 }
+
+const svg = (body: string) =>
+  `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+const ICON = {
+  home: svg('<path d="M4 11l8-7 8 7v8a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z"/>'),
+  work: svg('<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M3 13h18"/>'),
+  other: svg('<path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/>'),
+  add: svg('<path d="M12 5v14M5 12h14"/>'),
+  edit: svg('<path d="M4 20h4L19 9l-4-4L4 16z"/>'),
+  recent: svg('<path d="M3.5 12a8.5 8.5 0 1 0 2.5-6M3 3v4h4M12 8v4l3 2"/>'),
+  search: svg('<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/>'),
+  locate: svg('<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="7"/>'),
+  map: svg('<path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2z"/><path d="M9 4v14M15 6v14"/>'),
+};
 
 const money = (n: number) => `$${Math.round(n)}`;
 const money2 = (n: number) => `$${n.toFixed(2)}`;
@@ -335,20 +364,69 @@ function renderQuotes(): void {
 
 function emptyState(): string {
   const d = S.data;
-  const row = (p: Place, i: number, kind: 'saved' | 'recent', label?: string) => `
-    <button class="place-row" data-act="quick-dest" data-kind="${kind}" data-i="${i}">
-      <span class="place-icon" aria-hidden="true">${kind === 'saved' ? '★' : '↺'}</span>
-      <span class="place-text"><span class="place-name">${esc(label ?? p.name)}</span><span class="place-addr">${esc(p.address)}</span></span>
-    </button>`;
-  const saved = d.saved.map((p, i) => row(p, i, 'saved', p.label)).join('');
   const recents = d.recents
-    .filter((r) => !isSaved(d, r))
+    .filter((r) => !findSaved(d, r))
     .slice(0, 5)
-    .map((p) => row(p, d.recents.indexOf(p), 'recent'))
+    .map(
+      (p) => `
+    <button class="place-row" data-act="quick-dest" data-i="${d.recents.indexOf(p)}">
+      <span class="place-icon" aria-hidden="true">${ICON.recent}</span>
+      <span class="place-text"><span class="place-name">${esc(p.name)}</span><span class="place-addr">${esc(p.address)}</span></span>
+    </button>`,
+    )
     .join('');
-  if (!saved && !recents)
-    return `<div class="empty hero"><p class="hero-title">Every ride, one screen.</p><p>Enter a destination once to compare Uber, Lyft, and robotaxis side by side, then open your pick with the trip already filled in.</p></div>`;
-  return `${saved ? `<h2 class="section">Saved</h2>${saved}` : ''}${recents ? `<h2 class="section">Recent</h2>${recents}` : ''}`;
+  const hero =
+    d.saved.length || recents
+      ? ''
+      : `<div class="empty hero"><p class="hero-title">Every ride, one screen.</p><p>Enter a destination once to compare Uber, Lyft, and robotaxis side by side, then open your pick with the trip already filled in.</p></div>`;
+  return `${hero}${savedSection('main')}${recents ? `<h2 class="section">Recent</h2>${recents}` : ''}`;
+}
+
+/** Where a saved-places list is shown: the main screen, a trip picker, or Settings. */
+type SavedTarget = 'main' | 'pickup' | 'dropoff' | 'settings';
+
+/** Home, Work, custom places and "Add a place". Rows pick the place, or edit it in Settings. */
+function savedSection(target: SavedTarget): string {
+  const d = S.data;
+  const row = (sp: SavedPlace) => {
+    const sub = sp.kind === 'other' || sp.name === sp.label ? sp.address : `${sp.name}, ${sp.address}`;
+    const act = target === 'settings' ? 'edit-place' : 'use-saved';
+    return `
+    <div class="place-line">
+      <button class="place-row" data-act="${act}" data-id="${sp.id}" data-target="${target}">
+        <span class="place-icon ${sp.kind}" aria-hidden="true">${ICON[sp.kind]}</span>
+        <span class="place-text"><span class="place-name">${esc(sp.label)}</span><span class="place-addr">${esc(sub)}</span></span>
+      </button>
+      ${target === 'settings' ? '' : `<button class="icon-btn sm" data-act="edit-place" data-id="${sp.id}" data-target="${target}" aria-label="Edit ${esc(sp.label)}">${ICON.edit}</button>`}
+    </div>`;
+  };
+  const unset = (kind: 'home' | 'work') => `
+    <button class="place-row unset" data-act="edit-place" data-kind="${kind}" data-target="${target}">
+      <span class="place-icon ${kind}" aria-hidden="true">${ICON[kind]}</span>
+      <span class="place-text"><span class="place-name">Set ${KIND_LABEL[kind]}</span><span class="place-addr">Add your ${KIND_LABEL[kind].toLowerCase()} address</span></span>
+    </button>`;
+  const fixed = (['home', 'work'] as const).map((k) => {
+    const sp = savedOfKind(d, k);
+    return sp ? row(sp) : unset(k);
+  });
+  const others = orderedSaved(d)
+    .filter((sp) => sp.kind === 'other')
+    .map(row);
+  return `
+    <h2 class="section">Saved places</h2>
+    <div class="saved-list">
+      ${fixed.join('')}${others.join('')}
+      <button class="place-row add" data-act="edit-place" data-kind="other" data-target="${target}">
+        <span class="place-icon" aria-hidden="true">${ICON.add}</span>
+        <span class="place-text"><span class="place-name">Add a place</span></span>
+      </button>
+    </div>`;
+}
+
+/** A saved place as a trip endpoint: show its label, keep the real address. */
+function savedAsPlace(sp: SavedPlace): Place {
+  const address = sp.kind === 'other' || sp.name === sp.label ? sp.address : `${sp.name}, ${sp.address}`;
+  return { name: sp.label, address, lat: sp.lat, lng: sp.lng };
 }
 
 function renderFooter(): void {
@@ -395,35 +473,36 @@ function closeSheet(): void {
 
 let pickerResults: Place[] = [];
 
-function openPicker(which: 'pickup' | 'dropoff'): void {
+type PickerMode = 'pickup' | 'dropoff' | 'save';
+
+function openPicker(which: PickerMode): void {
   const d = S.data;
-  const special =
-    which === 'pickup'
-      ? `<button class="place-row" data-act="picker-gps"><span class="place-icon" aria-hidden="true">◎</span><span class="place-text"><span class="place-name">Current location</span></span></button>`
-      : '';
-  const listRow = (p: Place, act: string, i: number, icon: string, label?: string) => `
-    <div class="place-line">
-      <button class="place-row" data-act="${act}" data-i="${i}">
-        <span class="place-icon" aria-hidden="true">${icon}</span>
-        <span class="place-text"><span class="place-name">${esc(label ?? p.name)}</span><span class="place-addr">${esc(p.address)}</span></span>
-      </button>
-    </div>`;
+  const saving = which === 'save';
+  const back = saving ? 'back-to-editor' : 'close-sheet';
+  const simple = (act: string, icon: string, label: string) =>
+    `<button class="place-row" data-act="${act}"><span class="place-icon" aria-hidden="true">${icon}</span><span class="place-text"><span class="place-name">${label}</span></span></button>`;
+  const recentRow = (p: Place, i: number) => `
+    <button class="place-row" data-act="picker-recent" data-i="${i}">
+      <span class="place-icon" aria-hidden="true">${ICON.recent}</span>
+      <span class="place-text"><span class="place-name">${esc(p.name)}</span><span class="place-addr">${esc(p.address)}</span></span>
+    </button>`;
+  const placeholder = which === 'pickup' ? 'Pickup location' : saving ? 'Search for an address' : 'Where to?';
   const sheet = openSheet(
     `<header class="sheet-head">
-      <button class="icon-btn" data-act="close-sheet" aria-label="Back">‹</button>
+      <button class="icon-btn" data-act="${back}" aria-label="Back">‹</button>
       <input class="search" type="search" enterkeyhint="search" autocomplete="off" autocorrect="off" spellcheck="false"
-        placeholder="${which === 'pickup' ? 'Pickup location' : 'Where to?'}" aria-label="${which === 'pickup' ? 'Search pickup' : 'Search destination'}">
+        placeholder="${placeholder}" aria-label="${placeholder}">
     </header>
     <div class="sheet-body" data-which="${which}">
       <div class="results" aria-live="polite"></div>
       <div class="defaults">
-        ${special}
-        <button class="place-row" data-act="picker-map"><span class="place-icon" aria-hidden="true">⌖</span><span class="place-text"><span class="place-name">Choose on map</span></span></button>
-        ${d.saved.length ? `<h2 class="section">Saved</h2>${d.saved.map((p, i) => listRow(p, 'picker-saved', i, '★', p.label)).join('')}` : ''}
-        ${d.recents.length ? `<h2 class="section">Recent</h2>${d.recents.map((p, i) => listRow(p, 'picker-recent', i, '↺')).join('')}` : ''}
+        ${which !== 'dropoff' ? simple('picker-gps', ICON.locate, 'Current location') : ''}
+        ${simple('picker-map', ICON.map, 'Choose on map')}
+        ${saving ? '' : savedSection(which)}
+        ${d.recents.length ? `<h2 class="section">Recent</h2>${d.recents.map(recentRow).join('')}` : ''}
       </div>
     </div>`,
-    { full: true, label: which === 'pickup' ? 'Choose pickup' : 'Choose destination' },
+    { full: true, label: saving ? 'Choose address' : which === 'pickup' ? 'Choose pickup' : 'Choose destination' },
   );
   const input = $<HTMLInputElement>('.search', sheet);
   const results = $('.results', sheet);
@@ -450,10 +529,14 @@ function openPicker(which: 'pickup' | 'dropoff'): void {
               (p, i) => `
           <div class="place-line">
             <button class="place-row" data-act="picker-result" data-i="${i}">
-              <span class="place-icon" aria-hidden="true">⌕</span>
+              <span class="place-icon" aria-hidden="true">${ICON.search}</span>
               <span class="place-text"><span class="place-name">${esc(p.name)}</span><span class="place-addr">${esc(p.address)}</span></span>
             </button>
-            <button class="star ${isSaved(S.data, p) ? 'on' : ''}" data-act="picker-star" data-i="${i}" aria-label="Save ${esc(p.name)}" aria-pressed="${isSaved(S.data, p)}">${isSaved(S.data, p) ? '★' : '☆'}</button>
+            ${
+              saving
+                ? ''
+                : `<button class="star ${findSaved(S.data, p) ? 'on' : ''}" data-act="picker-star" data-i="${i}" aria-label="${findSaved(S.data, p) ? 'Edit saved place' : 'Save'} ${esc(p.name)}">${findSaved(S.data, p) ? '★' : '☆'}</button>`
+            }
           </div>`,
             )
             .join('')
@@ -479,20 +562,25 @@ function openPicker(which: 'pickup' | 'dropoff'): void {
   input.focus();
 }
 
-function choose(which: 'pickup' | 'dropoff', p: Place): void {
+function choose(which: PickerMode, p: Place): void {
+  if (which === 'save') {
+    if (editing) editing.place = p;
+    return openPlaceEditor();
+  }
   closeSheet();
   setPlace(which, p);
 }
 
-function openMapPicker(which: 'pickup' | 'dropoff'): void {
+function openMapPicker(which: PickerMode): void {
   const t = trip();
-  const center = (which === 'pickup' ? t.pickup : t.dropoff) ?? t.pickup ?? { lat: 37.7749, lng: -122.4194 };
+  const start = which === 'save' ? editing?.place : which === 'pickup' ? t.pickup : t.dropoff;
+  const center = start ?? t.pickup ?? { lat: 37.7749, lng: -122.4194 };
   const sheet = openSheet(
     `<header class="sheet-head">
-      <button class="icon-btn" data-act="close-sheet" aria-label="Back">‹</button>
-      <h2 class="sheet-title">Drag the map to set ${which === 'pickup' ? 'pickup' : 'destination'}</h2>
+      <button class="icon-btn" data-act="${which === 'save' ? 'back-to-editor' : 'close-sheet'}" aria-label="Back">‹</button>
+      <h2 class="sheet-title">Drag the map to set ${which === 'pickup' ? 'pickup' : which === 'save' ? 'the address' : 'destination'}</h2>
     </header>
-    <div class="pick-map"><div class="pick-map-canvas"></div><span class="center-pin ${which}" aria-hidden="true"></span></div>
+    <div class="pick-map"><div class="pick-map-canvas"></div><span class="center-pin ${which === 'pickup' ? 'pickup' : 'dropoff'}" aria-hidden="true"></span></div>
     <div class="sheet-actions"><button class="primary wide" data-act="map-confirm" data-which="${which}">Use this spot</button></div>`,
     { full: true, label: 'Choose on map' },
   );
@@ -505,6 +593,104 @@ function openMapPicker(which: 'pickup' | 'dropoff'): void {
 }
 
 let mapPickerCenter: (() => { lat: number; lng: number }) | null = null;
+
+// Saved place editor -----------------------------------------------------------
+
+interface Editing {
+  id: string;
+  isNew: boolean;
+  kind: PlaceKind;
+  label: string;
+  place: Place | null;
+  /** Where to go after saving: use the place for the trip, or back to Settings. */
+  target: SavedTarget | null;
+}
+
+let editing: Editing | null = null;
+
+function startEdit(opts: { id?: string; kind?: PlaceKind; place?: Place; target?: SavedTarget | null }): void {
+  const existing = opts.id ? S.data.saved.find((s) => s.id === opts.id) : opts.place ? findSaved(S.data, opts.place) : undefined;
+  if (existing) {
+    const { id, kind, label, name, address, lat, lng } = existing;
+    editing = { id, isNew: false, kind, label: kind === 'other' ? label : '', place: { name, address, lat, lng }, target: opts.target ?? null };
+  } else {
+    const kind = opts.kind ?? 'other';
+    // Home/Work already set? Edit that one rather than making a second.
+    const current = kind !== 'other' ? savedOfKind(S.data, kind) : undefined;
+    if (current) return startEdit({ id: current.id, target: opts.target });
+    editing = { id: newId(), isNew: true, kind, label: opts.place && kind === 'other' ? opts.place.name : '', place: opts.place ?? null, target: opts.target ?? null };
+  }
+  openPlaceEditor();
+}
+
+function openPlaceEditor(): void {
+  if (!editing) return;
+  openSheet(
+    `<header class="sheet-head">
+      <button class="icon-btn" data-act="editor-cancel" aria-label="Back">‹</button>
+      <h2 class="sheet-title">${editing.isNew ? 'Save a place' : 'Edit place'}</h2>
+    </header>
+    <div class="sheet-body editor"></div>`,
+    { full: true, label: editing.isNew ? 'Save a place' : 'Edit place' },
+  );
+  renderEditor(editing.kind === 'other' && !editing.label);
+}
+
+function renderEditor(focusLabel = false): void {
+  const e = editing;
+  const body = document.querySelector<HTMLElement>('.editor');
+  if (!e || !body) return;
+  const kindBtn = (k: PlaceKind, label: string) =>
+    `<button class="${e.kind === k ? 'on' : ''}" aria-pressed="${e.kind === k}" data-act="edit-kind" data-v="${k}">${ICON[k]}<span>${label}</span></button>`;
+  const clash = e.kind !== 'other' ? savedOfKind(S.data, e.kind) : undefined;
+  const replaces = clash && clash.id !== e.id ? `<p class="note">This replaces your current ${KIND_LABEL[e.kind as 'home' | 'work']} (${esc(clash.name)}).</p>` : '';
+  const canSave = !!e.place && (e.kind !== 'other' || e.label.trim().length > 0);
+  body.innerHTML = `
+    <h2 class="section">Type</h2>
+    <div class="seg kind-seg" role="group" aria-label="Place type">${kindBtn('home', 'Home')}${kindBtn('work', 'Work')}${kindBtn('other', 'Other')}</div>
+    ${replaces}
+    ${
+      e.kind === 'other'
+        ? `<h2 class="section">Label</h2>
+           <input class="text-input" type="text" data-input="edit-label" value="${esc(e.label)}" placeholder="e.g. Gym, Mom’s, Airport" maxlength="40" aria-label="Label" autocapitalize="words">`
+        : ''
+    }
+    <h2 class="section">Address</h2>
+    <button class="place-row boxed" data-act="edit-address">
+      <span class="place-icon" aria-hidden="true">${ICON.other}</span>
+      <span class="place-text">${
+        e.place
+          ? `<span class="place-name">${esc(e.place.name)}</span><span class="place-addr">${esc(e.place.address)}</span>`
+          : '<span class="place-name placeholder">Choose an address</span>'
+      }</span>
+      <span class="chev" aria-hidden="true">›</span>
+    </button>
+    <button class="primary wide big" data-act="save-place" ${canSave ? '' : 'disabled'}>Save</button>
+    ${e.isNew ? '' : '<button class="secondary wide danger" data-act="delete-place">Delete place</button>'}`;
+  if (focusLabel) body.querySelector<HTMLInputElement>('[data-input="edit-label"]')?.focus();
+}
+
+function finishEdit(saved: SavedPlace | null): void {
+  const target = editing?.target ?? null;
+  const wasNew = editing?.isNew ?? false;
+  editing = null;
+  closeSheet();
+  renderQuotes();
+  if (target === 'settings') return openSettings();
+  // A place added while choosing a trip endpoint is used right away.
+  if (saved && wasNew && (target === 'pickup' || target === 'dropoff')) return setPlace(target, savedAsPlace(saved));
+}
+
+function savePlace(): void {
+  const e = editing;
+  if (!e?.place) return;
+  const sp: SavedPlace = { ...e.place, id: e.id, kind: e.kind, label: e.label };
+  upsertSaved(S.data, sp);
+  persist();
+  const stored = S.data.saved.find((x) => x.id === e.id)!;
+  toast(`Saved ${stored.label}.`);
+  finishEdit(stored);
+}
 
 // Book / check ---------------------------------------------------------------
 
@@ -700,13 +886,6 @@ function openSettings(): void {
         <span class="seg sm">${opt('auto', 'Auto')}${opt('always', 'On')}${opt('hide', 'Off')}</span>
       </li>`;
   };
-  const savedRows = S.data.saved
-    .map(
-      (p, i) => `<li class="set-row"><span class="set-body"><span>★ ${esc(p.label)}</span><span class="muted small">${esc(p.address)}</span></span>
-      <button class="link" data-act="rename-saved" data-i="${i}">Rename</button>
-      <button class="icon-btn sm" data-act="del-saved" data-i="${i}" aria-label="Remove ${esc(p.label)}">✕</button></li>`,
-    )
-    .join('');
   openSheet(
     `<header class="sheet-head">
       <button class="icon-btn" data-act="close-sheet" aria-label="Back">‹</button>
@@ -730,8 +909,7 @@ function openSettings(): void {
         <input type="checkbox" ${st.peakAdjust ? 'checked' : ''} data-input="peak">
       </label>
 
-      <h2 class="section">Saved places</h2>
-      ${savedRows ? `<ul class="set-list">${savedRows}</ul>` : '<p class="note">Tap ☆ next to a search result to save it.</p>'}
+      ${savedSection('settings')}
 
       <h2 class="section">Your data</h2>
       <p class="note">Everything is stored only on this phone. Place searches go to Photon (komoot) and routes to the OSRM demo server, both OpenStreetMap services; map tiles come from OpenStreetMap.</p>
@@ -775,7 +953,7 @@ function onClick(e: MouseEvent): void {
   const act = el.dataset.act!;
   const id = el.dataset.id ?? '';
   const i = Number(el.dataset.i);
-  const which = (el.closest<HTMLElement>('[data-which]')?.dataset.which ?? el.dataset.which) as 'pickup' | 'dropoff';
+  const which = (el.closest<HTMLElement>('[data-which]')?.dataset.which ?? el.dataset.which) as PickerMode;
   switch (act) {
     case 'pick':
       return openPicker(el.dataset.which as 'pickup' | 'dropoff');
@@ -816,38 +994,58 @@ function onClick(e: MouseEvent): void {
     case 'close-sheet':
       return closeSheet();
     case 'quick-dest': {
-      const list = el.dataset.kind === 'saved' ? S.data.saved : S.data.recents;
-      const p = list[i];
-      if (p) setPlace('dropoff', { name: p.name, address: p.address, lat: p.lat, lng: p.lng });
+      const p = S.data.recents[i];
+      if (p) setPlace('dropoff', p);
       return;
     }
+    case 'use-saved': {
+      const sp = S.data.saved.find((x) => x.id === id);
+      if (!sp) return;
+      closeSheet();
+      return setPlace(el.dataset.target === 'pickup' ? 'pickup' : 'dropoff', savedAsPlace(sp));
+    }
+    case 'edit-place':
+      return startEdit({ id: id || undefined, kind: el.dataset.kind as PlaceKind | undefined, target: (el.dataset.target as SavedTarget) ?? null });
+    case 'edit-kind':
+      if (!editing) return;
+      editing.kind = el.dataset.v as PlaceKind;
+      return renderEditor(editing.kind === 'other');
+    case 'edit-address':
+      return openPicker('save');
+    case 'back-to-editor':
+      return openPlaceEditor();
+    case 'editor-cancel':
+      return finishEdit(null);
+    case 'save-place':
+      return savePlace();
+    case 'delete-place': {
+      if (!editing) return;
+      const label = editing.kind === 'other' ? editing.label : KIND_LABEL[editing.kind];
+      if (!window.confirm(`Delete “${label}” from saved places?`)) return;
+      removeSaved(S.data, editing.id);
+      persist();
+      return finishEdit(null);
+    }
     case 'picker-gps':
+      if (which === 'save') {
+        el.querySelector('.place-name')!.textContent = 'Finding you…';
+        void currentPosition()
+          .then((pos) => reverseGeocode(pos.lat, pos.lng))
+          .then((p) => choose('save', p))
+          .catch((err: Error) => toast(err.message));
+        return;
+      }
       closeSheet();
       return void useGps();
     case 'picker-map':
       return openMapPicker(which);
     case 'picker-result':
       return choose(which, pickerResults[i]);
-    case 'picker-saved': {
-      const s = S.data.saved[i];
-      return choose(which, { name: s.label, address: s.address, lat: s.lat, lng: s.lng });
-    }
     case 'picker-recent':
       return choose(which, S.data.recents[i]);
     case 'picker-star': {
       const p = pickerResults[i];
-      if (!p) return;
-      if (isSaved(S.data, p)) toggleSaved(S.data, p);
-      else {
-        const label = window.prompt('Name this place (e.g. Home, Work)', p.name);
-        if (label === null) return;
-        toggleSaved(S.data, p, label.trim() || p.name);
-      }
-      persist();
-      const on = isSaved(S.data, p);
-      el.classList.toggle('on', on);
-      el.textContent = on ? '★' : '☆';
-      el.setAttribute('aria-pressed', String(on));
+      if (p) startEdit({ place: p, target: which === 'save' ? null : which });
       return;
     }
     case 'map-confirm': {
@@ -875,19 +1073,6 @@ function onClick(e: MouseEvent): void {
       S.data.settings.providerPrefs[id as keyof typeof PROVIDERS] = el.dataset.v as ProviderPref;
       persist();
       renderAll();
-      return openSettings();
-    case 'rename-saved': {
-      const s = S.data.saved[i];
-      const label = s && window.prompt('Rename', s.label);
-      if (s && label) s.label = label.trim();
-      persist();
-      renderQuotes();
-      return openSettings();
-    }
-    case 'del-saved':
-      S.data.saved.splice(i, 1);
-      persist();
-      renderQuotes();
       return openSettings();
     case 'export':
       return exportData();
@@ -917,6 +1102,13 @@ function onInput(e: Event): void {
       const out = $('[data-out="vot"]');
       if (out) out.textContent = `${money(S.data.settings.valueOfTime * 60)}/hour`;
       return renderQuotes();
+    }
+    case 'edit-label': {
+      if (!editing) return;
+      editing.label = el.value;
+      const btn = document.querySelector<HTMLButtonElement>('[data-act="save-place"]');
+      if (btn) btn.disabled = !editing.place || !editing.label.trim();
+      return;
     }
     case 'peak':
       S.data.settings.peakAdjust = el.checked;

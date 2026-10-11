@@ -994,3 +994,77 @@ input[type='range'] {
   font-weight: 550;
   box-shadow: 0 6px 20px rgb(0 0 0 / 0.25);
 }
+
+/* ---------- saved places ---------- */
+.saved-list {
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 4px 6px;
+}
+.saved-list > * + * {
+  border-top: 1px solid var(--line);
+}
+.saved-list .place-row {
+  border-radius: 0;
+}
+.place-icon.home {
+  background: var(--fast-bg);
+  color: var(--fast);
+}
+.place-icon.work {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+.place-icon.other {
+  background: var(--av-bg);
+  color: var(--av);
+}
+.place-row.unset .place-name,
+.place-row.add .place-name {
+  color: var(--accent);
+}
+.place-row.add .place-icon {
+  background: transparent;
+  color: var(--accent);
+}
+.place-name.placeholder {
+  color: var(--muted);
+  font-weight: 500;
+}
+.place-row.boxed {
+  background: var(--surface);
+  border-radius: 14px;
+  padding: 10px 12px;
+  margin-bottom: 16px;
+}
+.chev {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 1.4rem;
+}
+.kind-seg {
+  margin-bottom: 4px;
+}
+.kind-seg button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 44px;
+}
+.text-input {
+  width: 100%;
+  min-height: 48px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--surface);
+  padding: 0 14px;
+  font-size: 1.05rem;
+}
+.text-input:focus {
+  outline: 2px solid var(--accent);
+}
+.sheet-body .saved-list {
+  box-shadow: none;
+}
